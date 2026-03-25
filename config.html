@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Master Pro | Presets</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); }
+        input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+    </style>
+</head>
+<body class="text-slate-200 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <header class="flex flex-col lg:flex-row justify-between items-center mb-6 gap-6 glass p-6 rounded-2xl border border-slate-700 shadow-2xl">
+            <div class="text-center lg:text-left">
+                <h1 class="text-3xl font-extrabold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                    MIDI Master Pro
+                </h1>
+                <div class="flex items-center justify-center lg:justify-start gap-2 mt-1">
+                    <span id="conn-icon" class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                    <span id="status-text" class="text-slate-400 text-xs font-mono uppercase tracking-widest">Desconectado</span>
+                </div>
+            </div>
+            
+            <div class="flex flex-wrap justify-center gap-3">
+                <button onclick="conectar()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold transition-all active:scale-95 text-sm">
+                    🔌 Conectar USB
+                </button>
+                <button onclick="lerDados()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg font-bold transition-all text-sm">
+                    📥 Ler do Pedal
+                </button>
+                <button onclick="salvarNoArduino()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold transition-all shadow-lg text-sm">
+                    💾 Gravar no Arduino
+                </button>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            <div class="glass border border-slate-700 p-4 rounded-xl flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-bold text-slate-500 uppercase">Exportar Configuração</p>
+                    <p class="text-[10px] text-slate-400">Salva os valores atuais em um arquivo .json</p>
+                </div>
+                <button onclick="exportarJSON()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all">
+                    📤 Exportar JSON
+                </button>
+            </div>
+
+            <div class="glass border border-slate-700 p-4 rounded-xl flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-bold text-slate-500 uppercase">Importar Configuração</p>
+                    <p class="text-[10px] text-slate-400">Carrega valores de um arquivo para a tela</p>
+                </div>
+                <label class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs font-bold cursor-pointer transition-all">
+                    📂 Abrir Arquivo
+                    <input type="file" id="fileInput" class="hidden" accept=".json" onchange="importarJSON(event)">
+                </label>
+            </div>
+        </div>
+
+        <div id="painel" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            </div>
+    </div>
+
+    <script>
+        let port;
+        const labels = ["Clique Simples", "Clique Duplo", "Segurar (2s)"];
+        const painel = document.getElementById('painel');
+
+        // Inicialização da Interface
+        for(let f=1; f<=4; f++) {
+            let card = `
+                <div class="glass border border-slate-700 rounded-3xl overflow-hidden shadow-xl">
+                    <div class="bg-slate-800/50 px-6 py-3 border-b border-slate-700 flex justify-between items-center">
+                        <h3 class="font-black text-lg tracking-tight text-cyan-400">FOOTSWITCH 0${f}</h3>
+                    </div>
+                    <div class="p-5 space-y-3">`;
+
+            for(let a=0; a<3; a++) {
+                card += `
+                    <div class="action-row bg-slate-800/30 p-3 rounded-xl border border-slate-700/50">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[10px] font-bold text-slate-500 uppercase">${labels[a]}</span>
+                            <select class="tipo bg-slate-900 border-none text-cyan-400 text-[10px] font-bold rounded px-2 py-1">
+                                <option value="0">MODE: CC</option>
+                                <option value="1">MODE: PC</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <div class="flex flex-col text-center">
+                                <span class="text-[9px] text-slate-500 mb-1">CC/PC</span>
+                                <input type="number" class="num bg-slate-900 border-none rounded p-1 text-center font-mono text-emerald-400 text-sm" value="0" min="0" max="127">
+                            </div>
+                            <div class="flex flex-col text-center">
+                                <span class="text-[9px] text-slate-500 mb-1">VAL A</span>
+                                <input type="number" class="v1 bg-slate-900 border-none rounded p-1 text-center font-mono text-cyan-400 text-sm" value="127" min="0" max="127">
+                            </div>
+                            <div class="flex flex-col text-center">
+                                <span class="text-[9px] text-slate-500 mb-1">VAL B</span>
+                                <input type="number" class="v2 bg-slate-900 border-none rounded p-1 text-center font-mono text-pink-400 text-sm" value="0" min="0" max="127">
+                            </div>
+                        </div>
+                    </div>`;
+            }
+            card += `</div></div>`;
+            painel.innerHTML += card;
+        }
+
+        // --- COMUNICAÇÃO SERIAL ---
+        async function conectar() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 31250 });
+                document.getElementById('status-text').innerText = "Conectado";
+                document.getElementById('conn-icon').classList.replace('bg-red-500', 'bg-emerald-500');
+                escutar();
+            } catch (e) { alert("Erro ao conectar."); }
+        }
+
+        async function escutar() {
+            const textDecoder = new TextDecoderStream();
+            port.readable.pipeTo(textDecoder.writable);
+            const reader = textDecoder.readable.getReader();
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value.includes("DATA:")) {
+                    const dados = value.split("DATA:")[1].split(",");
+                    aplicarDadosNaTela(dados);
+                }
+            }
+        }
+
+        function aplicarDadosNaTela(dadosArray) {
+            const rows = document.querySelectorAll('.action-row');
+            for(let i=0; i<12; i++) {
+                rows[i].querySelector('.tipo').value = dadosArray[i*4];
+                rows[i].querySelector('.num').value = dadosArray[i*4+1];
+                rows[i].querySelector('.v1').value = dadosArray[i*4+2];
+                rows[i].querySelector('.v2').value = dadosArray[i*4+3];
+            }
+        }
+
+        async function enviarMsg(msg) {
+            if (!port) return alert("Conecte o Arduino primeiro!");
+            const encoder = new TextEncoder();
+            const writer = port.writable.getWriter();
+            await writer.write(encoder.encode(msg));
+            writer.releaseLock();
+        }
+
+        function lerDados() { enviarMsg("READ\n"); }
+        
+        function salvarNoArduino() {
+            let csv = "";
+            document.querySelectorAll('.action-row').forEach((row, idx) => {
+                csv += `${row.querySelector('.tipo').value},${row.querySelector('.num').value},${row.querySelector('.v1').value},${row.querySelector('.v2').value}${idx < 11 ? "," : ""}`;
+            });
+            enviarMsg("SAVE:" + csv + "\n");
+            alert("Enviado para o Arduino!");
+        }
+
+        // --- FUNÇÕES DE EXPORT/IMPORT JSON ---
+        function exportarJSON() {
+            const config = [];
+            document.querySelectorAll('.action-row').forEach(row => {
+                config.push({
+                    tipo: row.querySelector('.tipo').value,
+                    num: row.querySelector('.num').value,
+                    v1: row.querySelector('.v1').value,
+                    v2: row.querySelector('.v2').value
+                });
+            });
+            
+            const blob = new Blob([JSON.stringify(config, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'meu_preset_midi.json';
+            a.click();
+        }
+
+        function importarJSON(event) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const config = JSON.parse(e.target.result);
+                    const rows = document.querySelectorAll('.action-row');
+                    config.forEach((item, i) => {
+                        rows[i].querySelector('.tipo').value = item.tipo;
+                        rows[i].querySelector('.num').value = item.num;
+                        rows[i].querySelector('.v1').value = item.v1;
+                        rows[i].querySelector('.v2').value = item.v2;
+                    });
+                    alert("Preset carregado na tela! Não esqueça de clicar em 'Gravar no Arduino'.");
+                } catch (err) { alert("Arquivo JSON inválido."); }
+            };
+            reader.readAsText(event.target.files[0]);
+        }
+    </script>
+</body>
+</html>
