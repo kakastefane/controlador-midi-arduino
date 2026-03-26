@@ -26,8 +26,11 @@
             </div>
             
             <div class="flex flex-wrap justify-center gap-3">
-                <button onclick="conectar()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold transition-all active:scale-95 text-sm">
+                <button id="btn-conectar" onclick="conectar()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-bold transition-all active:scale-95 text-sm">
                     🔌 Conectar USB
+                </button>
+                <button id="btn-desconectar" onclick="desconectar()" class="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg font-bold transition-all active:scale-95 text-sm hidden">
+                    ⛔ Desconectar
                 </button>
                 <button onclick="lerDados()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg font-bold transition-all text-sm">
                     📥 Ler do Pedal
@@ -67,6 +70,7 @@
 
     <script>
         let port;
+        let reader;
         const labels = ["Clique Simples", "Clique Duplo", "Segurar (2s)"];
         const painel = document.getElementById('painel');
 
@@ -116,21 +120,64 @@
                 await port.open({ baudRate: 31250 });
                 document.getElementById('status-text').innerText = "Conectado";
                 document.getElementById('conn-icon').classList.replace('bg-red-500', 'bg-emerald-500');
+                document.getElementById('btn-conectar').classList.add('hidden');
+                document.getElementById('btn-desconectar').classList.remove('hidden');
                 escutar();
-            } catch (e) { alert("Erro ao conectar."); }
+                // Ativa modo config no Arduino (suspende MIDI)
+                await enviarMsg("CONFIG_ON\n");
+            } catch (e) { alert("Erro ao conectar: " + e); }
+        }
+
+        async function desconectar() {
+            try {
+                await enviarMsg("CONFIG_OFF\n");
+                await new Promise(r => setTimeout(r, 200));
+                if (reader) {
+                    await reader.cancel();
+                    reader.releaseLock();
+                    reader = null;
+                }
+                await port.close();
+                port = null;
+                document.getElementById('status-text').innerText = "Desconectado";
+                document.getElementById('conn-icon').classList.replace('bg-emerald-500', 'bg-red-500');
+                document.getElementById('btn-conectar').classList.remove('hidden');
+                document.getElementById('btn-desconectar').classList.add('hidden');
+            } catch (e) { alert("Erro ao desconectar: " + e); }
         }
 
         async function escutar() {
-            const textDecoder = new TextDecoderStream();
-            port.readable.pipeTo(textDecoder.writable);
-            const reader = textDecoder.readable.getReader();
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                if (value.includes("DATA:")) {
-                    const dados = value.split("DATA:")[1].split(",");
-                    aplicarDadosNaTela(dados);
+            const decoder = new TextDecoder();
+            reader = port.readable.getReader();
+            let buffer = "";
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    let lines = buffer.split("\n");
+                    buffer = lines.pop();
+                    for (const line of lines) {
+                        processarLinha(line.trim());
+                    }
                 }
+            } catch (e) {
+                // reader.cancel() causa erro esperado aqui
+            }
+        }
+
+        function processarLinha(line) {
+            if (line.startsWith("DATA:")) {
+                const dados = line.substring(5).split(",");
+                aplicarDadosNaTela(dados);
+                document.getElementById('status-text').innerText = "DADOS CARREGADOS ✓";
+            } else if (line === "CONFIRMED") {
+                document.getElementById('status-text').innerText = "GRAVADO ✓";
+                setTimeout(() => {
+                    document.getElementById('status-text').innerText = "CONECTADO";
+                }, 2000);
+            } else if (line === "OK") {
+                // Resposta do CONFIG_ON/CONFIG_OFF
             }
         }
 
@@ -152,15 +199,34 @@
             writer.releaseLock();
         }
 
-        function lerDados() { enviarMsg("READ\n"); }
+        function lerDados() {
+            if (!port) return alert("Conecte o Arduino primeiro!");
+            document.getElementById('status-text').innerText = "LENDO...";
+            enviarMsg("READ\n");
+        }
         
-        function salvarNoArduino() {
+        async function salvarNoArduino() {
+            if (!port) return alert("Clique em Conectar primeiro!");
+
             let csv = "";
-            document.querySelectorAll('.action-row').forEach((row, idx) => {
-                csv += `${row.querySelector('.tipo').value},${row.querySelector('.num').value},${row.querySelector('.v1').value},${row.querySelector('.v2').value}${idx < 11 ? "," : ""}`;
+            const rows = document.querySelectorAll('.action-row');
+            
+            rows.forEach((row, idx) => {
+                const t = row.querySelector('.tipo').value;
+                const n = row.querySelector('.num').value;
+                const v1 = row.querySelector('.v1').value;
+                const v2 = row.querySelector('.v2').value;
+                csv += `${t},${n},${v1},${v2}${idx < 11 ? "," : ""}`;
             });
-            enviarMsg("SAVE:" + csv + "\n");
-            alert("Enviado para o Arduino!");
+
+            try {
+                document.getElementById('status-text').innerText = "GRAVANDO...";
+                await enviarMsg("SAVE:" + csv + "\n");
+                // A resposta "CONFIRMED" será tratada pela função processarLinha()
+            } catch (e) {
+                alert("Erro ao enviar: " + e);
+                document.getElementById('status-text').innerText = "ERRO";
+            }
         }
 
         // --- FUNÇÕES DE EXPORT/IMPORT JSON ---
@@ -180,25 +246,35 @@
             const a = document.createElement('a');
             a.href = url;
             a.download = 'meu_preset_midi.json';
+            document.body.appendChild(a); // Necessário para alguns navegadores
             a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url); // Libera memória
         }
 
         function importarJSON(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            event.target.value = ''; // Reset para permitir reimportação do mesmo arquivo
+            
             const reader = new FileReader();
             reader.onload = function(e) {
                 try {
                     const config = JSON.parse(e.target.result);
+                    if (!Array.isArray(config)) throw new Error("O arquivo não contém um preset válido. Re-exporte pelo botão 'Exportar JSON'.");
                     const rows = document.querySelectorAll('.action-row');
                     config.forEach((item, i) => {
-                        rows[i].querySelector('.tipo').value = item.tipo;
-                        rows[i].querySelector('.num').value = item.num;
-                        rows[i].querySelector('.v1').value = item.v1;
-                        rows[i].querySelector('.v2').value = item.v2;
+                        if (rows[i]) {
+                            rows[i].querySelector('.tipo').value = item.tipo;
+                            rows[i].querySelector('.num').value = item.num;
+                            rows[i].querySelector('.v1').value = item.v1;
+                            rows[i].querySelector('.v2').value = item.v2;
+                        }
                     });
                     alert("Preset carregado na tela! Não esqueça de clicar em 'Gravar no Arduino'.");
-                } catch (err) { alert("Arquivo JSON inválido."); }
+                } catch (err) { alert("Arquivo JSON inválido: " + err.message); }
             };
-            reader.readAsText(event.target.files[0]);
+            reader.readAsText(file);
         }
     </script>
 </body>
