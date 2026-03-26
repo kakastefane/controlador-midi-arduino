@@ -9,6 +9,8 @@
         body { background-color: #0f172a; }
         .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); }
         input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+        .action-disabled { opacity: 0.3; pointer-events: none; }
+        .toggle-label { user-select: none; }
     </style>
 </head>
 <body class="text-slate-200 min-h-screen p-4 md:p-8">
@@ -77,9 +79,19 @@
         // Inicialização da Interface
         for(let f=1; f<=4; f++) {
             let card = `
-                <div class="glass border border-slate-700 rounded-3xl overflow-hidden shadow-xl">
+                <div class="foot-card glass border border-slate-700 rounded-3xl overflow-hidden shadow-xl">
                     <div class="bg-slate-800/50 px-6 py-3 border-b border-slate-700 flex justify-between items-center">
                         <h3 class="font-black text-lg tracking-tight text-cyan-400">FOOTSWITCH 0${f}</h3>
+                        <div class="flex gap-4">
+                            <label class="toggle-label flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer">
+                                <input type="checkbox" class="dc-toggle accent-cyan-500" data-foot="${f-1}" checked onchange="toggleMode(${f-1})">
+                                Duplo
+                            </label>
+                            <label class="toggle-label flex items-center gap-1.5 text-[10px] text-slate-400 cursor-pointer">
+                                <input type="checkbox" class="hold-toggle accent-pink-500" data-foot="${f-1}" checked onchange="toggleMode(${f-1})">
+                                Hold
+                            </label>
+                        </div>
                     </div>
                     <div class="p-5 space-y-3">`;
 
@@ -111,6 +123,19 @@
             }
             card += `</div></div>`;
             painel.innerHTML += card;
+        }
+
+        function toggleMode(footIndex) {
+            const cards = document.querySelectorAll('.foot-card');
+            const card = cards[footIndex];
+            const rows = card.querySelectorAll('.action-row');
+            const dcChecked = card.querySelector('.dc-toggle').checked;
+            const holdChecked = card.querySelector('.hold-toggle').checked;
+            // Row 0 = clique simples (sempre ativo)
+            // Row 1 = clique duplo
+            rows[1].classList.toggle('action-disabled', !dcChecked);
+            // Row 2 = hold
+            rows[2].classList.toggle('action-disabled', !holdChecked);
         }
 
         // --- COMUNICAÇÃO SERIAL ---
@@ -189,6 +214,16 @@
                 rows[i].querySelector('.v1').value = dadosArray[i*4+2];
                 rows[i].querySelector('.v2').value = dadosArray[i*4+3];
             }
+            // Modos (4 bytes a partir do índice 48)
+            const dcToggles = document.querySelectorAll('.dc-toggle');
+            const holdToggles = document.querySelectorAll('.hold-toggle');
+            for(let f=0; f<4; f++) {
+                const m = parseInt(dadosArray[48 + f]);
+                const modo = isNaN(m) ? 3 : m;
+                dcToggles[f].checked = !!(modo & 1);
+                holdToggles[f].checked = !!(modo & 2);
+                toggleMode(f);
+            }
         }
 
         async function enviarMsg(msg) {
@@ -216,8 +251,18 @@
                 const n = row.querySelector('.num').value;
                 const v1 = row.querySelector('.v1').value;
                 const v2 = row.querySelector('.v2').value;
-                csv += `${t},${n},${v1},${v2}${idx < 11 ? "," : ""}`;
+                csv += `${t},${n},${v1},${v2},`;
             });
+
+            // Adiciona modos dos 4 footswitches
+            const dcToggles = document.querySelectorAll('.dc-toggle');
+            const holdToggles = document.querySelectorAll('.hold-toggle');
+            for(let f=0; f<4; f++) {
+                let m = 0;
+                if(dcToggles[f].checked) m |= 1;
+                if(holdToggles[f].checked) m |= 2;
+                csv += m + (f < 3 ? "," : "");
+            }
 
             try {
                 document.getElementById('status-text').innerText = "GRAVANDO...";
@@ -231,37 +276,61 @@
 
         // --- FUNÇÕES DE EXPORT/IMPORT JSON ---
         function exportarJSON() {
-            const config = [];
+            const acoes = [];
             document.querySelectorAll('.action-row').forEach(row => {
-                config.push({
+                acoes.push({
                     tipo: row.querySelector('.tipo').value,
                     num: row.querySelector('.num').value,
                     v1: row.querySelector('.v1').value,
                     v2: row.querySelector('.v2').value
                 });
             });
+
+            const modos = [];
+            const dcToggles = document.querySelectorAll('.dc-toggle');
+            const holdToggles = document.querySelectorAll('.hold-toggle');
+            for(let f=0; f<4; f++) {
+                let m = 0;
+                if(dcToggles[f].checked) m |= 1;
+                if(holdToggles[f].checked) m |= 2;
+                modos.push(m);
+            }
             
-            const blob = new Blob([JSON.stringify(config, null, 2)], {type: 'application/json'});
+            const preset = { acoes, modos };
+            const blob = new Blob([JSON.stringify(preset, null, 2)], {type: 'application/json'});
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
             a.download = 'meu_preset_midi.json';
-            document.body.appendChild(a); // Necessário para alguns navegadores
+            document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url); // Libera memória
+            URL.revokeObjectURL(url);
         }
 
         function importarJSON(event) {
             const file = event.target.files[0];
             if (!file) return;
-            event.target.value = ''; // Reset para permitir reimportação do mesmo arquivo
+            event.target.value = '';
             
             const reader = new FileReader();
             reader.onload = function(e) {
                 try {
-                    const config = JSON.parse(e.target.result);
-                    if (!Array.isArray(config)) throw new Error("O arquivo não contém um preset válido. Re-exporte pelo botão 'Exportar JSON'.");
+                    const parsed = JSON.parse(e.target.result);
+                    let config, modos;
+
+                    if (Array.isArray(parsed)) {
+                        // Formato antigo (só array de ações)
+                        config = parsed;
+                        modos = [3, 3, 3, 3];
+                    } else {
+                        // Formato novo { acoes, modos }
+                        config = parsed.acoes;
+                        modos = parsed.modos || [3, 3, 3, 3];
+                    }
+
+                    if (!Array.isArray(config)) throw new Error("Preset inválido.");
+
                     const rows = document.querySelectorAll('.action-row');
                     config.forEach((item, i) => {
                         if (rows[i]) {
@@ -271,6 +340,16 @@
                             rows[i].querySelector('.v2').value = item.v2;
                         }
                     });
+
+                    const dcToggles = document.querySelectorAll('.dc-toggle');
+                    const holdToggles = document.querySelectorAll('.hold-toggle');
+                    for(let f=0; f<4; f++) {
+                        const m = modos[f] !== undefined ? modos[f] : 3;
+                        dcToggles[f].checked = !!(m & 1);
+                        holdToggles[f].checked = !!(m & 2);
+                        toggleMode(f);
+                    }
+
                     alert("Preset carregado na tela! Não esqueça de clicar em 'Gravar no Arduino'.");
                 } catch (err) { alert("Arquivo JSON inválido: " + err.message); }
             };
