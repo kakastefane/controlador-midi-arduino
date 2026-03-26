@@ -18,7 +18,8 @@ struct Comando {
 
 Comando acoes[12];
 bool estadoToggle[12];
-bool modoConfig = false; // Suspende MIDI enquanto configura via web
+bool modoConfig = false;
+byte modos[4]; // bits: 0=doubleClick, 1=hold (3=ambos habilitados)
 
 OneButton btn1(FOOT1_PIN, true);
 OneButton btn2(FOOT2_PIN, true);
@@ -34,6 +35,7 @@ void setup() {
   pinMode(10, OUTPUT); digitalWrite(10, LOW);  // GND MIDI
 
   EEPROM.get(0, acoes);
+  EEPROM.get(sizeof(acoes), modos);
   
   if(acoes[0].tipo == 255) {
     for(int i=0; i<12; i++) {
@@ -43,22 +45,18 @@ void setup() {
     EEPROM.put(0, acoes);
   }
 
-  // Mapeamento completo dos 4 botões
+  if(modos[0] == 255) {
+    for(int i=0; i<4; i++) modos[i] = 3; // Default: ambos habilitados
+    EEPROM.put(sizeof(acoes), modos);
+  }
+
+  // Clique simples sempre ativo
   btn1.attachClick([](){ disparar(0); });
-  btn1.attachDoubleClick([](){ disparar(1); });
-  btn1.attachLongPressStop([](){ disparar(2); });
-
   btn2.attachClick([](){ disparar(3); });
-  btn2.attachDoubleClick([](){ disparar(4); });
-  btn2.attachLongPressStop([](){ disparar(5); });
-
   btn3.attachClick([](){ disparar(6); });
-  btn3.attachDoubleClick([](){ disparar(7); });
-  btn3.attachLongPressStop([](){ disparar(8); });
-
   btn4.attachClick([](){ disparar(9); });
-  btn4.attachDoubleClick([](){ disparar(10); });
-  btn4.attachLongPressStop([](){ disparar(11); });
+
+  aplicarModos();
 }
 
 void loop() {
@@ -99,13 +97,44 @@ void disparar(int index) {
   }
 }
 
+void aplicarModos() {
+  // Foot 1
+  if(modos[0] & 1) btn1.attachDoubleClick([](){ disparar(1); });
+  else btn1.attachDoubleClick(NULL);
+  if(modos[0] & 2) btn1.attachLongPressStop([](){ disparar(2); });
+  else btn1.attachLongPressStop(NULL);
+
+  // Foot 2
+  if(modos[1] & 1) btn2.attachDoubleClick([](){ disparar(4); });
+  else btn2.attachDoubleClick(NULL);
+  if(modos[1] & 2) btn2.attachLongPressStop([](){ disparar(5); });
+  else btn2.attachLongPressStop(NULL);
+
+  // Foot 3
+  if(modos[2] & 1) btn3.attachDoubleClick([](){ disparar(7); });
+  else btn3.attachDoubleClick(NULL);
+  if(modos[2] & 2) btn3.attachLongPressStop([](){ disparar(8); });
+  else btn3.attachLongPressStop(NULL);
+
+  // Foot 4
+  if(modos[3] & 1) btn4.attachDoubleClick([](){ disparar(10); });
+  else btn4.attachDoubleClick(NULL);
+  if(modos[3] & 2) btn4.attachLongPressStop([](){ disparar(11); });
+  else btn4.attachLongPressStop(NULL);
+}
+
 void enviarConfigParaWeb() {
   Serial.print("DATA:");
   for(int i=0; i<12; i++) {
     Serial.print(acoes[i].tipo); Serial.print(",");
     Serial.print(acoes[i].num); Serial.print(",");
     Serial.print(acoes[i].val1); Serial.print(",");
-    Serial.print(acoes[i].val2); if(i < 11) Serial.print(",");
+    Serial.print(acoes[i].val2); Serial.print(",");
+  }
+  // Modos dos 4 footswitches
+  for(int i=0; i<4; i++) {
+    Serial.print(modos[i]);
+    if(i < 3) Serial.print(",");
   }
   Serial.println();
 }
@@ -132,9 +161,18 @@ void parseComplexConfig(String csv) {
     ptr = strtok(NULL, ",");
   }
   
+  // Parse modos (4 bytes após as 12 ações)
+  for(int j=0; j<4; j++) {
+    if(ptr) {
+      modos[j] = (byte)constrain(atoi(ptr), 0, 3);
+      ptr = strtok(NULL, ",");
+    }
+  }
+  
   // GRAVAÇÃO FÍSICA NA MEMÓRIA
   EEPROM.put(0, acoes);
+  EEPROM.put(sizeof(acoes), modos);
+  aplicarModos();
   
-  // Força o reset dos estados de toggle para evitar confusão
   for(int j=0; j<12; j++) estadoToggle[j] = false;
 }
